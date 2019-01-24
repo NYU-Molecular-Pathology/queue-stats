@@ -8,6 +8,13 @@ The current implementation simply evaluates the state of the cluster partitions 
 
 # Usage
 
+Clone this repo:
+
+```
+git clone --recursive https://github.com/NYU-Molecular-Pathology/queue-stats.git
+cd queue-stats
+```
+
 Run the program:
 
 ```
@@ -40,6 +47,6 @@ $ cat slurm.json
 
 # Software
 
-- Python
+- Python (2.7+)
 
 - `cron`

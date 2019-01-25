@@ -39,10 +39,10 @@ partition_blacklist = [
 "data_mover",
 "cpu_dev",
 "gpu4_dev",
+"gpu8_dev",
 "fn_short",
 "fn_medium",
-"fn_long",
-"cpu_long"
+"fn_long"
 ]
 
 # get the partitions and jobs info from the system

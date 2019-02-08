@@ -32,7 +32,8 @@ best_queue = "cpu_short"
 intellispace_cpus = 0
 
 # limit on allowed intellispace queue usage
-intellispace_cpus_limit = 80
+# allow more requested CPUs than true number to help bias 'best_queue' towards this queue more
+intellispace_cpus_limit = 120 
 
 # do not submit to these queues
 partition_blacklist = [

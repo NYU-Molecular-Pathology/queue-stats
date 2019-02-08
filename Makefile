@@ -6,3 +6,6 @@ CRONINTERVAL:=*/5 * * * *
 cron: CRONCMD:=$(CRONINTERVAL) . $(shell echo $$HOME)/.bash_profile; cd $(shell pwd); python qstats.py >> qstats.log 2>&1
 cron:
 	@echo "$(CRONCMD)"
+
+update:
+	git submodule update --recursive --remote --init

@@ -17,9 +17,24 @@ cd queue-stats
 
 Run the program:
 
+- terminal output
+
 ```
 ./qstats.py
 [2019-01-24T16:23:41] best queue: intellispace, most idle: gpu4_short, most mixed: cpu_short, intellispace cpus: 0
+```
+
+- JSON output
+
+```
+$ cat slurm.json
+{
+    "best_queue": "intellispace",
+    "updated": "2019-01-24T16:25:01",
+    "most_mixed": "cpu_short",
+    "intellispace_cpus": 0,
+    "most_idle": "gpu4_short"
+}
 ```
 
 Create a `cron` entry for automated execution:
@@ -32,18 +47,6 @@ $ make cron
 
 Add the new entry to you crontab with `crontab -e`.
 
-Example output:
-
-```
-$ cat slurm.json
-{
-    "best_queue": "intellispace",
-    "updated": "2019-01-24T16:25:01",
-    "most_mixed": "cpu_short",
-    "intellispace_cpus": 0,
-    "most_idle": "gpu4_short"
-}
-```
 
 # Software
 

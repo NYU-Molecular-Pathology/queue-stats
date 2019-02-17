@@ -2,6 +2,9 @@
 # -*- coding: utf-8 -*-
 """
 Get SLURM availability summary
+
+roughly analagous to:
+sinfo -O 'allocmem,freemem,nodehost,partition'
 """
 import util.slurm as slurm
 import csv

@@ -26,14 +26,14 @@ timestamp_str = timestamp.strftime('%Y-%m-%dT%H:%M:%S')
 output_json_file = "slurm.json"
 
 # default best queue
-best_queue = "cpu_short"
+best_queue = "intellispace"
 
 # starting value of intellispace cpu usage
 intellispace_cpus = 0
 
 # limit on allowed intellispace queue usage
 # allow more requested CPUs than true number to help bias 'best_queue' towards this queue more
-intellispace_cpus_limit = 240 
+intellispace_cpus_limit = 160
 
 # do not submit to these queues
 partition_blacklist = [
@@ -41,9 +41,12 @@ partition_blacklist = [
 "cpu_dev",
 "gpu4_dev",
 "gpu8_dev",
-"fn_short",
-"fn_medium",
+# "fn_short",
+# "fn_medium",
 "fn_long"
+# "cpu_short",
+# "cpu_medium"
+#"cpu_long"
 ]
 
 # get the partitions and jobs info from the system

@@ -7,6 +7,12 @@ similar to:
 
 squeue -u $USER -o '%i|%T|%P|%m'
 squeue -u $USER -O 'jobid,state,minmemory,mincpus'
+
+
+Usage:
+$ ./qtotal.py
+Total usage: 82 CPUs, 1064.0GB memory
+
 """
 import util.slurm as slurm
 import os

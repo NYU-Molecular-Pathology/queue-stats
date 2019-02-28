@@ -1,0 +1,18 @@
+#!/bin/bash
+# Requeue all PENDING jobs on SLURM cluster
+
+qto="${1:-none}";
+qfrom="${2:-none}";
+if [ "${qto}" == "none" ]; then
+    echo "error: qto must be supplied as first arg";
+    exit 1;
+fi;
+if [ "${qfrom}" != "none" ]; then
+    squeue -u $USER -O "jobid,state,partition" | tr -s [[:space:]] | grep --color=auto PENDING | grep --color=auto "${qfrom}" | cut -d ' ' -f1 | while read item; do
+        scontrol update JobId="$item" Partition="${qto}";
+    done;
+else
+    squeue -u $USER -O "jobid,state,partition" | tr -s [[:space:]] | grep --color=auto PENDING | cut -d ' ' -f1 | while read item; do
+        scontrol update JobId="$item" Partition="${qto}";
+    done;
+fi

@@ -1,0 +1,385 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Get the SLURM cluster usage per user
+
+"""
+import subprocess as sp
+from collections import defaultdict
+import re
+import time
+import datetime
+import csv
+import sys
+import argparse
+
+class Squeue(object):
+    """
+    View information about jobs located in the Slurm scheduling queue.
+
+    https://slurm.schedmd.com/squeue.html
+
+    Examples
+    ---------
+
+    sq = Squeue()
+    sq.get()
+    """
+    def __init__(self, command = ('squeue', '-O', 'username,jobid,partition,state,minmemory,mincpus,timeused,timelimit'), debug = False):
+        self.command = command
+        if not debug:
+            self.update()
+
+    def update(self):
+        """
+        """
+        returncode, entries = self.get_squeue()
+        self.returncode = returncode
+        self.entries = entries
+
+    def get_squeue(self):
+        """
+        Get the 'squeue' HPC cluster usage information
+
+        Returns
+        -------
+        int, list
+            integer error code from the 'squeue' command
+            a list of dicts representing the 'squeue' values; the case of an error, returns an empty list
+        """
+        # system command to run
+        process = sp.Popen(self.command,
+                            stdout = sp.PIPE,
+                            stderr = sp.PIPE,
+                            shell = False,
+                            universal_newlines = True)
+        # run the command, capture stdout and stderr
+        proc_stdout, proc_stderr = process.communicate()
+        # check the exit status
+        if process.returncode == 0:
+            # parse the stdout table
+            entries = [ entry for entry in self.parse_SLURM_table(stdout = proc_stdout) ]
+        else:
+            entries = []
+        return(process.returncode, entries)
+
+    def parse_SLURM_table(self, stdout):
+        """
+        Convert the table formated output of SLURM 'sinfo -o '%all', 'squeue -o '%all', etc., commands into a list of dicts
+
+        Parameters
+        ----------
+        stdout: str
+            the stdout of a SLURM sinfo or squeue command
+
+        Returns
+        -------
+        dict
+            yields a dict of entries from each valid line in the stdout
+        """
+        # split all the stdout lines
+        lines = stdout.split('\n')
+        # get the headers from the first line
+        header_line = lines.pop(0)
+        # split the headers apart
+        header_cols = header_line.split()
+        header_cols = [ x.strip() for x in header_cols ]
+        # iterate over remaining lines
+        for line in lines:
+            # split each line
+            parts = line.split()
+            parts = [ x.strip() for x in parts ]
+            # start building dict for the values
+            d = {}
+            # make sure that the stdout line has the same number of fields as the headers
+            if len(parts) == len(header_cols):
+                # fill in the dict values and yield the results
+                for i, header_col in enumerate(header_cols):
+                    d[header_col] = parts[i]
+                yield(d)
+            else:
+                pass # do something here
+
+def parse_time(time_str):
+    """
+    Parse a SLURM timestamp, return total seconds
+
+    Examples
+    --------
+    >>> parse_time('2-14:01:37')
+    223297.0
+
+    >>> parse_time('18-02:02:46')
+    1562566.0
+
+    >>> parse_time('0:00:00')
+    0.0
+
+    >>> parse_time("0:02")
+    2.0
+
+    """
+    # num seconds in a day
+    seconds_per_day = 86400.0
+    num_days = 0
+    total_seconds = 0.0
+    if '-' in time_str:
+        parts = time_str.split('-')
+        num_days += int(parts[0])
+        time_str_split = parts[1]
+        x = time.strptime(time_str_split, '%H:%M:%S')
+        total_seconds += datetime.timedelta(hours=x.tm_hour,minutes=x.tm_min,seconds=x.tm_sec).total_seconds()
+        total_seconds += num_days * seconds_per_day
+    elif time_str.count(':') == 1:
+        x = time.strptime(time_str, '%M:%S')
+        total_seconds += datetime.timedelta(hours=x.tm_hour,minutes=x.tm_min,seconds=x.tm_sec).total_seconds()
+    else:
+        x = time.strptime(time_str, '%H:%M:%S')
+        total_seconds += datetime.timedelta(hours=x.tm_hour,minutes=x.tm_min,seconds=x.tm_sec).total_seconds()
+    return(total_seconds)
+
+# number of bytes per size
+mem_key = {
+'T': 1024 * 1024 * 1024 * 1024,
+'G': 1024 * 1024 * 1024,
+'M': 1024 * 1024,
+'K': 1024
+}
+
+# need regex to strip the letters from the mem value; "16G"
+non_decimal = re.compile(r'[^\d.]+')
+
+def parse_mem(mem_str, mem_key = mem_key, non_decimal = non_decimal):
+    """
+    Parse SLURM memory values, return total in bytes
+    """
+    # convert to a float
+    mem_num = float(non_decimal.sub('', mem_str))
+
+    # parse the memory; 16T, "16G", "16M", "16K"
+    if 'K' in mem_str:
+        mem_val = mem_num * mem_key['K']
+    elif 'M' in mem_str:
+        mem_val = mem_num * mem_key['M']
+    elif 'G' in mem_str:
+        mem_val = mem_num * mem_key['G']
+    elif 'T' in mem_str:
+        mem_val = mem_num * mem_key['T']
+    else:
+        # silently drop non-matching values.. ?
+        mem_val = 0
+    return(mem_val)
+
+def create_user_dict(entries):
+    """
+    Convert the per-job squeue output table dict into a per-user dict with job metrics aggregated
+    """
+    # dict to hold per-user entries
+    users = {}
+    # parse the squeue entries
+    for entry in entries:
+        username = entry['USER']
+        partition = entry['PARTITION']
+        state = entry['STATE']
+        mem = entry['MIN_MEMORY']
+        cpus = entry['MIN_CPUS']
+        time_used = entry['TIME']
+        time_limit = entry['TIME_LIMIT']
+
+        # parse values
+        time_used_val = parse_time(time_used)
+        mem_val = parse_mem(mem)
+
+        if state == "RUNNING":
+            # initialize user dict
+            if username not in users:
+                users[username] = {}
+
+            # dict for user's total running stats per partition
+            # initialize defaults if they are not already present
+            if 'partitions' not in users[username]:
+                users[username]['partitions'] = {}
+            if partition not in users[username]['partitions']:
+                users[username]['partitions'][partition] = {}
+            if 'jobs' not in users[username]['partitions'][partition]:
+                users[username]['partitions'][partition]['jobs'] = 0
+            if 'cpus' not in users[username]['partitions'][partition]:
+                users[username]['partitions'][partition]['cpus'] = 0
+            if 'mem' not in users[username]['partitions'][partition]:
+                users[username]['partitions'][partition]['mem'] = 0.0
+            if 'time' not in users[username]['partitions'][partition]:
+                users[username]['partitions'][partition]['time'] = 0.0
+
+            # add the new values
+            users[username]['partitions'][partition]['cpus'] += int(cpus)
+            users[username]['partitions'][partition]['mem'] += mem_val
+            users[username]['partitions'][partition]['time'] += time_used_val
+            users[username]['partitions'][partition]['jobs'] += 1
+
+            # dict for total usage
+            if 'total' not in users[username]:
+                users[username]['total'] = {}
+            if 'cpus' not in users[username]['total']:
+                users[username]['total']['cpus'] = 0
+            if 'mem' not in users[username]['total']:
+                users[username]['total']['mem'] = 0.0
+            if 'time' not in users[username]['total']:
+                users[username]['total']['time'] = 0.0
+            if 'jobs' not in users[username]['total']:
+                users[username]['total']['jobs'] = 0
+
+            users[username]['total']['cpus'] += int(cpus)
+            users[username]['total']['mem'] += mem_val
+            users[username]['total']['time'] += time_used_val
+            users[username]['total']['jobs'] += 1
+
+        elif state == "PENDING":
+            # initialize user dict
+            if username not in users:
+                users[username] = {}
+
+            # initialize dict for pending jobs
+            if 'pending' not in users[username]:
+                users[username]['pending'] = {}
+            if 'jobs' not in users[username]['pending']:
+                users[username]['pending']['jobs'] = 0
+            if 'cpus' not in users[username]['pending']:
+                users[username]['pending']['cpus'] = 0
+            if 'mem' not in users[username]['pending']:
+                users[username]['pending']['mem'] = 0.0
+            if 'time' not in users[username]['pending']:
+                users[username]['pending']['time'] = 0.0
+
+            users[username]['pending']['cpus'] += int(cpus)
+            users[username]['pending']['mem'] += mem_val
+            users[username]['pending']['time'] += time_used_val
+            users[username]['pending']['jobs'] += 1
+    return(users)
+
+def get_partition_fieldnames(users):
+    """
+    Generate a list of fieldnames based on the partitions in the userdict which will be used in the table output
+    """
+    partitions = []
+    for username, values in users.items():
+        if 'partitions' in values:
+            for key in values['partitions'].keys():
+                partitions.append(key)
+
+    partitions = sorted(list(set(partitions)))
+    fieldnames = ['user']
+    for partition in partitions:
+        fieldnames.append(partition)
+    fieldnames.append('total')
+    fieldnames.append('pending')
+    return(partitions, fieldnames)
+
+def format_metric(value, metric, mem_key = mem_key):
+    """
+    Format a value based on predefined methods for each metric
+
+    Parameters
+    ----------
+    value: str/int/float
+        value to be formatted
+    metric: str
+        one of "cpus", "mem", "time", "jobs"
+
+    Returns
+    -------
+    str
+        a formatted string
+    """
+    if metric == "cpus":
+        return("{0}".format(value))
+    elif metric == "mem":
+        return("{0}G".format(value / mem_key['G']))
+    elif metric == "jobs":
+        return("{0}".format(value))
+    elif metric == "time":
+        return("{0:.1f}hr".format(value / 3600))
+    else:
+        return('')
+
+def reformat_fieldname(fieldname):
+    return("{0:>7.6s}".format(fieldname))
+
+def reformat_username(username):
+    return("{0:>9.8}".format(username))
+
+def print_table(users, metric = "cpus"):
+    """
+    Prints the final table of user metrics
+    """
+    # get the fieldnames and partitions to print
+    partitions, fieldnames = get_partition_fieldnames(users)
+
+    # make a reformated list of the dicts for printing
+    dicts_to_print = []
+    for user, values in users.items():
+        d = {}
+        d[reformat_fieldname('user')] = reformat_username(user)
+
+        for partition in partitions:
+            if 'partitions' in values:
+                if partition in values['partitions']:
+                    d[reformat_fieldname(partition)] = format_metric(
+                        value = values['partitions'][partition][metric],
+                        metric = metric)
+            else:
+                d[reformat_fieldname(partition)] = ''
+
+        if 'pending' in values:
+            d[reformat_fieldname('pending')] = format_metric(
+                value = values['pending'][metric],
+                metric = metric)
+        else:
+            d[reformat_fieldname('pending')] = ''
+
+        if 'total' in values:
+            d[reformat_fieldname('total')] = format_metric(
+                value = values['total'][metric],
+                metric = metric)
+        else:
+            d[reformat_fieldname('total')] = ''
+        dicts_to_print.append(d)
+
+    dicts_to_print = sorted(dicts_to_print, key=lambda k: k[reformat_fieldname('total')], reverse=True)
+
+    # print to console
+    writer = csv.DictWriter(sys.stdout,
+                    delimiter = '\t',
+                    fieldnames = [reformat_fieldname(fieldname) for fieldname in fieldnames])
+    writer.writeheader()
+    for d in dicts_to_print:
+        writer.writerow(d)
+
+def main(**kwargs):
+    metric = kwargs.pop('metric', "cpus")
+    # get the SLURM squeue
+    # USER JOBID PARTITION STATE MIN_MEMORY MIN_CPUS TIME TIME_LIMIT
+    queue = Squeue()
+
+    # get dict of parsed values per user
+    users = create_user_dict(entries = queue.entries)
+
+    # print the parsed table
+    print_table(users, metric = metric)
+
+
+def parse():
+    """
+    Parses script args
+    """
+    parser = argparse.ArgumentParser(description='Calculates per-user SLURM usage metrics')
+    parser.add_argument('metric',
+                        nargs="?",
+                        default = "cpus",
+                        choices=["cpus", "mem", "time", "jobs"],
+                        help='metric to report')
+    args = parser.parse_args()
+
+    main(**vars(args))
+
+if __name__ == '__main__':
+    parse()

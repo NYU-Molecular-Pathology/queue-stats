@@ -1,0 +1,233 @@
+#!/bin/env perl
+
+# this is derived from the program written by John Wofford @ C2B2 Columbia University
+# and heavily modified by Paul Glick for use at NYU Langone Medical Center
+#
+use strict;
+use warnings;
+
+use Getopt::Long;
+
+my %opt;
+GetOptions(\%opt, qw(--top=n));
+
+my $r=slurm::usage_by_user_x_time();
+$r->sort_by(order::column_sort(q(run)));
+if ($opt{top}) {
+  $r->sort_by(\&order::volume);
+  $r->prune($opt{top});
+}
+$r->render(totals=>1);
+
+exit 0;
+
+package slurm;
+use Data::Dumper;
+my @partition_names;
+
+sub get_partition_names {
+  open(my $fd, q{scontrol show partitions |}) or die "slurm: can't squeue";
+	$_=<$fd>;
+  while ($_=<$fd>) {
+	if ($_ =~ /^PartitionName/) {
+		my ($a,$b) = split(/=/, $_);
+		push @partition_names, substr($b,0,6);
+	}
+    chomp;
+  }
+#	foreach my $p ( @partition_names ) { print($p);}
+#	print("\n");
+}
+
+sub usage_by_user_x_time {
+  my %r;
+  slurm::squeue(sub {
+	return \%r unless @_;
+
+	my ($jobid,$owner,$proc_name,$state,$queue,$nodes,$node_list)=@_;
+	my $run=0;
+	$queue=substr($queue,0,6);
+	if ($state=~/E/)         { $queue=q(err)  }
+	elsif ($state=~/PD/)     { $queue=q(pend)  }
+	elsif (not length($queue))  { $queue=q(pend) }
+	elsif ($queue=~/^dev/)     { $queue=q(dev); $run=1 }
+	elsif ($queue=~/^intell/)     { $queue=q(intell); $run=1 }
+	elsif ($queue=~/^shoham/)     { $queue=q(shoham); $run=1 }
+	elsif ($queue=~/^cpu_(de|sh|me|lo)/)  { $run=1 }  # admits old stuff too
+	elsif ($queue=~/^gpu4_(d|s|m|l)/)  { $run=1 }  # admits old stuff too
+	elsif ($queue=~/^gpu8_(d|s|m|l)/)  { $run=1 }  # admits old stuff too
+	elsif ($queue=~/^fn_(sho|med|lon)/)  { $run=1 }  # admits old stuff too
+    else  {$queue=q(oth) }
+#   print("jobid=",$jobid," owner=",$owner," state=",$state," queue=",$queue," nodes=",$nodes," node_list=",$node_list,"\n");
+      $r{$owner}->{$queue}+=$nodes;
+      $r{$owner}->{q(run)}+=$nodes if $run;
+    });
+
+	my @cols = ( @partition_names );
+	push @cols, 'oth';
+	push @cols, 'run';
+	push @cols, 'pend';
+	push @cols, 'err';
+	my $i = 0;
+	foreach my $c ( @cols ) { chomp $c; }
+	my @rows=sort {$a cmp $b} keys %r;
+	return grid->new(rows=>\@rows, cols=>\@cols, data=>\%r);
+}
+
+sub usage_by_user_x_zone {
+  my %r;
+  slurm::squeue(sub {
+      return \%r unless @_;
+
+      my ($jobid,$queue,$name,$owner,$state,$time,$nodes,$nodelist)=@_;
+#    print("jobid=",$jobid," owner=",$owner," state=",$state," queue=",$queue," nodes=",$nodes," node_list=",$nodelist,"\n");
+		print("queue=",$queue,"\n");
+         if ($state=~/E/)         { $queue=q(err)  }
+      elsif ($state=~/PD/)        { $queue=q(pend)  }
+      elsif (not length($queue))  { $queue=q(pend) }
+      elsif ($queue=~/^pow/)      { $queue=q(old) }
+      elsif ($queue=~/^([^_]+)_/) { $queue=$1 }
+      else                        { $queue=q(oth) }
+      
+      $r{$owner}->{$queue}+=$nodes;
+    });
+  return slurm::usage->new(\%r);
+}
+
+sub squeue {
+  my $fp=shift;
+  unless ($fp) {
+    my @r;
+    $fp=sub {
+      push(@r,[@_]) if @_;
+      return \@r;
+    };
+  }
+	slurm::get_partition_names();
+  open(my $fd, q{squeue -a |}) or die "slurm: can't squeue";
+
+  # throw away header line
+  $_=<$fd>;
+
+  # eat the rest of the jobs
+  while ($_=<$fd>) {
+    chomp;
+
+    my $jobid=substr($_,   9, 10);  $jobid=~s/^\s*//;
+    my $queue=substr($_,   19, 9);  $queue=~s/^\s*//;
+	my $name=substr($_,   30, 8);   $name=~s/\s*$//;
+    my $owner=substr($_,  38, 8);   $owner=~s/\s*$//;
+    my $state=substr($_,  47, 2);   $state=~s/\s*$//;
+    my $time=substr($_,  51,10); 	$time=~s/\s*$//;  
+    my $nodes=substr($_,  62, 6); 	$nodes=~s/^\s*//;  
+#   my $slots=substr($_, 131, 2);   $slots=~s/^\s*//; $slots||=0;
+#   my $tasks=substr($_, 133,length($_)-102); $tasks=~s/\s*$//;
+    my $nodelist=substr($_, 68,16); $nodelist=~s/^\s*//;
+    
+#    print("jobid=",$jobid," owner=",$owner," state=",$state," queue=",$queue," nodes=",$nodes," node_list=",$nodelist,"\n");
+    $fp->($jobid,$owner,$name,$state,$queue,$nodes,$nodelist);
+  }  
+
+  close($fd);
+  $fp->();
+}
+
+
+package grid;
+
+sub get_queues {
+  
+
+sub new {
+  my $class=shift;
+  my $this=bless {@_}, $class;
+  $this->{all_rows}=[$this->rows];
+  return $this;
+}
+
+sub rows { @{shift->{rows}} }
+sub cols { @{shift->{cols}} }
+sub value {
+  my ($s,$r,$c)=@_;
+  return ($s->{data}->{$r}->{$c} || 0);
+}
+
+sub sort_by {
+  my ($self,$fp)=@_;
+  $self->{rows}=[sort {
+      $fp->($self->{data}->{$a}, $self->{data}->{$b})
+    } $self->rows];
+  return $self;
+}
+
+sub prune {
+  my ($self,$n)=@_;
+  $self->{rows}=[grep {defined $_} @{$self->{rows}}[0..($n-1)]];
+}
+
+sub hline {
+  my $self=shift;
+  print q(-) x 12;
+  foreach ($self->cols) { print q(-) x 7 }
+  printf qq{\n};
+}
+
+sub render {
+  my $self=shift;
+  my %opt=@_;
+
+  printf qq{%12s},q();
+  foreach ($self->cols) { printf qq{ %6.6s}, $_; }
+  printf qq{\n};
+
+  $self->hline;
+  
+  foreach my $row_id ($self->rows) {
+    printf qq{%12s}, $row_id;
+    foreach my $col_id ($self->cols) {
+      printf qq{ %6s}, ($self->value($row_id,$col_id) || q());
+    }
+    print qq{\n};
+  }
+
+  if ($opt{totals}) {
+    my %t;
+    foreach my $r (@{$self->{all_rows}}) {
+      foreach my $c ($self->cols) {
+        $t{$c}+=($self->value($r,$c)||0);
+      }
+    }
+
+    $self->hline;
+
+    printf qq{%12s}, q(total:);
+    foreach my $c ($self->cols) {
+	   $t{$c} = 0 if !defined($t{$c});
+      printf qq{ %6d}, $t{$c};
+    }
+    printf qq{\n};
+  }
+}
+
+package order;
+
+sub column_sort {
+  my $col=shift;
+  return sub {
+    my ($a,$b)=@_;
+    ($b->{$col}||0) <=> ($a->{$col}||0)
+  };
+}
+sub volume {
+  my ($a,$b)=@_;
+  util::sum(@$b{qw(run err pend)}) <=> util::sum(@$a{qw(run err pend)})
+}
+
+package util;
+sub sum { my $t=0; $t+=($_||0) foreach (@_); return $t; }
+
+	1;(@_);
+#	return $t;
+ }
+
+1;

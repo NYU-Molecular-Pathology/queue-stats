@@ -155,6 +155,7 @@ def print_nodes(nodes):
         data.append(d)
     data = sorted(data, key=lambda k: k['node'])
 
+    # print header
     # :(align right/left)<size of space to pad>.<lenght of original str>
     print("{node:8.8}  {allocmem:>8.8}  {freemem:>8.8}  {pcnt_mem:>8.8}  {cpus:>6.6}  {state:5.5}  {partitions:<}".format(
     node = "node",
@@ -165,8 +166,9 @@ def print_nodes(nodes):
     state = "state",
     partitions = "partitions"
     ))
-    for d in data:
 
+    # print each entry with custom formatting
+    for d in data:
         print(
         "{node:8.8}  {allocmem:>8.8}  {freemem:>8.8}  {pcnt_mem:>8.8}  {cpus:>6.6}  {state:5.5}  {partitions:<}".format(
             node = d['node'],

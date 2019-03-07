@@ -3,15 +3,20 @@
 """
 Get the SLURM cluster usage per user
 
+author: Stephen Kelly, NYU Langone Medical Center
+https://github.com/stevekm
 """
 import subprocess as sp
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 import re
 import time
 import datetime
 import csv
 import sys
 import argparse
+
+SLURM_command = ('squeue', '-O', 'username,jobid,partition,state,minmemory,mincpus,timeused,timelimit')
+# USER JOBID PARTITION STATE MIN_MEMORY MIN_CPUS TIME TIME_LIMIT
 
 class Squeue(object):
     """
@@ -25,13 +30,14 @@ class Squeue(object):
     sq = Squeue()
     sq.get()
     """
-    def __init__(self, command = ('squeue', '-O', 'username,jobid,partition,state,minmemory,mincpus,timeused,timelimit'), debug = False):
+    def __init__(self, command = SLURM_command, debug = False):
         self.command = command
         if not debug:
             self.update()
 
     def update(self):
         """
+        Updates the attributes of the object
         """
         returncode, entries = self.get_squeue()
         self.returncode = returncode
@@ -43,7 +49,7 @@ class Squeue(object):
 
         Returns
         -------
-        int, list
+        (int, list)
             integer error code from the 'squeue' command
             a list of dicts representing the 'squeue' values; the case of an error, returns an empty list
         """
@@ -104,6 +110,11 @@ def parse_time(time_str):
     """
     Parse a SLURM timestamp, return total seconds
 
+    Returns
+    -------
+    float
+        the number of seconds represented by the timestamp
+
     Examples
     --------
     >>> parse_time('2-14:01:37')
@@ -152,11 +163,16 @@ non_decimal = re.compile(r'[^\d.]+')
 def parse_mem(mem_str, mem_key = mem_key, non_decimal = non_decimal):
     """
     Parse SLURM memory values, return total in bytes
+    SLURM reports memory in values such as "16T", "16G", "16M", "16K"
+
+    Returns
+    -------
+    float
+        a float value representing the amount of memory in bytes
     """
     # convert to a float
     mem_num = float(non_decimal.sub('', mem_str))
 
-    # parse the memory; 16T, "16G", "16M", "16K"
     if 'K' in mem_str:
         mem_val = mem_num * mem_key['K']
     elif 'M' in mem_str:
@@ -173,6 +189,45 @@ def parse_mem(mem_str, mem_key = mem_key, non_decimal = non_decimal):
 def create_user_dict(entries):
     """
     Convert the per-job squeue output table dict into a per-user dict with job metrics aggregated
+
+    Returns
+    -------
+    dict
+        A dict with per-user, per-partition aggregated metrics. Memory in bytes, time in seconds.
+
+    Example:
+    {
+        "username1": {
+        "running": {
+            "mem": 309237645312.0,
+            "jobs": 5,
+            "cpus": 20,
+            "time": 476210.0
+        },
+        "partitions": {
+            "cpu_medium": {
+                "mem": 34359738368.0,
+                "jobs": 1,
+                "cpus": 1,
+                "time": 79753.0
+            },
+            "cpu_long": {
+                "mem": 137438953472.0,
+                "jobs": 1,
+                "cpus": 16,
+                "time": 60958.0
+                }
+            }
+        },
+    "username2": {
+        "pending": {
+            "mem": 8589934592.0,
+            "jobs": 2,
+            "cpus": 2,
+            "time": 0.0
+            }
+        }
+    }
     """
     # dict to hold per-user entries
     users = {}
@@ -197,41 +252,39 @@ def create_user_dict(entries):
 
             # dict for user's total running stats per partition
             # initialize defaults if they are not already present
-            if 'partitions' not in users[username]:
-                users[username]['partitions'] = {}
-            if partition not in users[username]['partitions']:
-                users[username]['partitions'][partition] = {}
-            if 'jobs' not in users[username]['partitions'][partition]:
-                users[username]['partitions'][partition]['jobs'] = 0
-            if 'cpus' not in users[username]['partitions'][partition]:
-                users[username]['partitions'][partition]['cpus'] = 0
-            if 'mem' not in users[username]['partitions'][partition]:
-                users[username]['partitions'][partition]['mem'] = 0.0
-            if 'time' not in users[username]['partitions'][partition]:
-                users[username]['partitions'][partition]['time'] = 0.0
+            if partition not in users[username]:
+                users[username][partition] = {}
+            if 'jobs' not in users[username][partition]:
+                users[username][partition]['jobs'] = 0
+            if 'cpus' not in users[username][partition]:
+                users[username][partition]['cpus'] = 0
+            if 'mem' not in users[username][partition]:
+                users[username][partition]['mem'] = 0.0
+            if 'time' not in users[username][partition]:
+                users[username][partition]['time'] = 0.0
 
             # add the new values
-            users[username]['partitions'][partition]['cpus'] += int(cpus)
-            users[username]['partitions'][partition]['mem'] += mem_val
-            users[username]['partitions'][partition]['time'] += time_used_val
-            users[username]['partitions'][partition]['jobs'] += 1
+            users[username][partition]['cpus'] += int(cpus)
+            users[username][partition]['mem'] += mem_val
+            users[username][partition]['time'] += time_used_val
+            users[username][partition]['jobs'] += 1
 
-            # dict for total usage
-            if 'total' not in users[username]:
-                users[username]['total'] = {}
-            if 'cpus' not in users[username]['total']:
-                users[username]['total']['cpus'] = 0
-            if 'mem' not in users[username]['total']:
-                users[username]['total']['mem'] = 0.0
-            if 'time' not in users[username]['total']:
-                users[username]['total']['time'] = 0.0
-            if 'jobs' not in users[username]['total']:
-                users[username]['total']['jobs'] = 0
+            # dict for total running usage
+            if 'running' not in users[username]:
+                users[username]['running'] = {}
+            if 'cpus' not in users[username]['running']:
+                users[username]['running']['cpus'] = 0
+            if 'mem' not in users[username]['running']:
+                users[username]['running']['mem'] = 0.0
+            if 'time' not in users[username]['running']:
+                users[username]['running']['time'] = 0.0
+            if 'jobs' not in users[username]['running']:
+                users[username]['running']['jobs'] = 0
 
-            users[username]['total']['cpus'] += int(cpus)
-            users[username]['total']['mem'] += mem_val
-            users[username]['total']['time'] += time_used_val
-            users[username]['total']['jobs'] += 1
+            users[username]['running']['cpus'] += int(cpus)
+            users[username]['running']['mem'] += mem_val
+            users[username]['running']['time'] += time_used_val
+            users[username]['running']['jobs'] += 1
 
         elif state == "PENDING":
             # initialize user dict
@@ -255,24 +308,6 @@ def create_user_dict(entries):
             users[username]['pending']['time'] += time_used_val
             users[username]['pending']['jobs'] += 1
     return(users)
-
-def get_partition_fieldnames(users):
-    """
-    Generate a list of fieldnames based on the partitions in the userdict which will be used in the table output
-    """
-    partitions = []
-    for username, values in users.items():
-        if 'partitions' in values:
-            for key in values['partitions'].keys():
-                partitions.append(key)
-
-    partitions = sorted(list(set(partitions)))
-    fieldnames = ['user']
-    for partition in partitions:
-        fieldnames.append(partition)
-    fieldnames.append('total')
-    fieldnames.append('pending')
-    return(partitions, fieldnames)
 
 def format_metric(value, metric, mem_key = mem_key):
     """
@@ -300,71 +335,163 @@ def format_metric(value, metric, mem_key = mem_key):
         return("{0:.1f}hr".format(value / 3600))
     else:
         return('')
+#
+# def reformat_fieldname(fieldname):
+#     return("{0:>7.6s}".format(fieldname))
+#
+# def reformat_username(username):
+#     return("{0:>9.8}".format(username))
+#
+# def print_table(users, metric = "cpus"):
+#     """
+#     Prints the final table of user metrics
+#     """
+#     # get the fieldnames and partitions to print
+#     partitions, fieldnames = get_partition_fieldnames(users)
+#
+#     # make a reformated list of the dicts for printing
+#     dicts_to_print = []
+#     for user, values in users.items():
+#         d = {}
+#         d[reformat_fieldname('user')] = reformat_username(user)
+#
+#         for partition in partitions:
+#             if 'partitions' in values:
+#                 if partition in values['partitions']:
+#                     d[reformat_fieldname(partition)] = format_metric(
+#                         value = values['partitions'][partition][metric],
+#                         metric = metric)
+#             else:
+#                 d[reformat_fieldname(partition)] = ''
+#
+#         if 'pending' in values:
+#             d[reformat_fieldname('pending')] = format_metric(
+#                 value = values['pending'][metric],
+#                 metric = metric)
+#         else:
+#             d[reformat_fieldname('pending')] = ''
+#
+#         if 'total' in values:
+#             d[reformat_fieldname('total')] = format_metric(
+#                 value = values['total'][metric],
+#                 metric = metric)
+#         else:
+#             d[reformat_fieldname('total')] = ''
+#         dicts_to_print.append(d)
+#
+#     dicts_to_print = sorted(dicts_to_print, key=lambda k: k[reformat_fieldname('total')], reverse=True)
+#
+#     # print to console
+#     writer = csv.DictWriter(sys.stdout,
+#                     delimiter = '\t',
+#                     fieldnames = [reformat_fieldname(fieldname) for fieldname in fieldnames])
+#     writer.writeheader()
+#     for d in dicts_to_print:
+#         writer.writerow(d)
 
-def reformat_fieldname(fieldname):
-    return("{0:>7.6s}".format(fieldname))
-
-def reformat_username(username):
-    return("{0:>9.8}".format(username))
-
-def print_table(users, metric = "cpus"):
+def create_totals_tups(users, metric):
     """
-    Prints the final table of user metrics
+    flatten dict into list of tuples so we can sort
     """
-    # get the fieldnames and partitions to print
-    partitions, fieldnames = get_partition_fieldnames(users)
+    totals_tups = []
+    for username, values in users.items():
+        for partition, totals in values.items():
+            t = (partition, username, totals[metric])
+            totals_tups.append(t)
+    totals_tups = sorted(totals_tups, key = lambda tup: tup[2], reverse = True)
+    return(totals_tups)
 
-    # make a reformated list of the dicts for printing
-    dicts_to_print = []
-    for user, values in users.items():
-        d = {}
-        d[reformat_fieldname('user')] = reformat_username(user)
+def print_table(users, totals, metric):
+    """
+    https://docs.python.org/3.6/library/string.html#format-specification-mini-language
+    """
+    # get sorted headers
+    headers = list(set([ t[0] for t in totals ]))
+    if 'running' in totals:
+        headers.remove('running')
+    if 'pending' in totals:
+        headers.remove('pending')
+    headers = sorted(headers)
+    if 'running' in totals:
+        headers.append('running')
+    if 'pending' in totals:
+        headers.append('pending')
+    num_headers = len(headers)
 
-        for partition in partitions:
-            if 'partitions' in values:
-                if partition in values['partitions']:
-                    d[reformat_fieldname(partition)] = format_metric(
-                        value = values['partitions'][partition][metric],
-                        metric = metric)
-            else:
-                d[reformat_fieldname(partition)] = ''
+    # get list of users to print; preserve order
+    ordered_users = []
+    for t in totals:
+        if t[1] not in ordered_users:
+            ordered_users.append(t[1])
+    print(ordered_users)
 
-        if 'pending' in values:
-            d[reformat_fieldname('pending')] = format_metric(
-                value = values['pending'][metric],
-                metric = metric)
-        else:
-            d[reformat_fieldname('pending')] = ''
+    # :(align right)<size of space to pad>.<lenght of original str>
+    header_line  = " ".join([ "{0:>9.7}".format(h)for h in headers ])
+    # pad 12 spaces for later usernames
+    header_line = "{0:>12}".format(" ") + header_line
+    print(header_line)
+    div_line = "-" * len(header_line)
+    print(div_line)
+    for user in ordered_users:
+        if user in users:
+            # start building line to print for each user
+            userline = "{0:>12} ".format(user)
+            # start making a list of the values to be printed
+            userline_vals = []
+            for header in headers:
+                if header in users[user]:
+                    header_index = headers.index(header)
+                    header_val = users[user][header]
+                    userline_vals.append((header_index, header_val))
+    # TODO: finish this...
 
-        if 'total' in values:
-            d[reformat_fieldname('total')] = format_metric(
-                value = values['total'][metric],
-                metric = metric)
-        else:
-            d[reformat_fieldname('total')] = ''
-        dicts_to_print.append(d)
+def print_totals(users, totals, metric):
+    """
+    Prints the list of user totals per-partition to the console
+    """
+    divider = '---------'
+    # get sorted headers
+    headers = list(set([ t[0] for t in totals ]))
+    if 'running' in totals:
+        headers.remove('running')
+    if 'pending' in totals:
+        headers.remove('pending')
+    headers = sorted(headers)
+    if 'running' in totals:
+        headers.append('running')
+    if 'pending' in totals:
+        headers.append('pending')
 
-    dicts_to_print = sorted(dicts_to_print, key=lambda k: k[reformat_fieldname('total')], reverse=True)
+    # rearrange the values per-partition
+    d = defaultdict(list)
+    for partition, username, total_val in totals:
+        d[partition].append((username, total_val))
 
-    # print to console
-    writer = csv.DictWriter(sys.stdout,
-                    delimiter = '\t',
-                    fieldnames = [reformat_fieldname(fieldname) for fieldname in fieldnames])
-    writer.writeheader()
-    for d in dicts_to_print:
-        writer.writerow(d)
+    # iterate over the headers list to ensure they are printed in the right order
+    for header in headers:
+        print("{0} ({1})".format(header, metric))
+        print(divider)
+        for username, total_val in d[header]:
+            # {0:10.10} : <pad to length 10>.<cut off str to length 10>
+            print("{0:10.10}: {1}".format(username, format_metric(value = total_val, metric = metric)))
+        print('\n')
+
 
 def main(**kwargs):
     metric = kwargs.pop('metric', "cpus")
     # get the SLURM squeue
-    # USER JOBID PARTITION STATE MIN_MEMORY MIN_CPUS TIME TIME_LIMIT
     queue = Squeue()
 
     # get dict of parsed values per user
     users = create_user_dict(entries = queue.entries)
 
+    # get totals per user
+    # totals = create_totals_dict(users, metric)
+    totals = create_totals_tups(users, metric)
+
     # print the parsed table
-    print_table(users, metric = metric)
+    # print_table(users, totals, metric) # TODO: finish this eventually
+    print_totals(users, totals, metric)
 
 
 def parse():
@@ -374,7 +501,7 @@ def parse():
     parser = argparse.ArgumentParser(description='Calculates per-user SLURM usage metrics')
     parser.add_argument('metric',
                         nargs="?",
-                        default = "cpus",
+                        default = "jobs",
                         choices=["cpus", "mem", "time", "jobs"],
                         help='metric to report')
     args = parser.parse_args()

@@ -478,6 +478,9 @@ def print_totals(users, totals, metric):
 
 
 def main(**kwargs):
+    """
+    Main control function for the script
+    """
     metric = kwargs.pop('metric', "cpus")
     # get the SLURM squeue
     queue = Squeue()

@@ -1,0 +1,205 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Get the total resource usage from SLURM for the current user
+
+similar to:
+
+squeue -u $USER -o '%i|%T|%P|%m'
+squeue -u $USER -O 'jobid,state,minmemory,mincpus'
+
+Usage:
+$ ./stotal
+Total usage: 82 CPUs, 1064.0GB memory
+
+author: Stephen Kelly, NYU Langone Medical Center
+https://github.com/stevekm
+"""
+import subprocess as sp
+import os
+import re
+import argparse
+
+mem_key = {
+'T': 1024 * 1024 * 1024 * 1024,
+'G': 1024 * 1024 * 1024,
+'M': 1024 * 1024,
+'K': 1024
+}
+
+# need regex to strip the letters from the mem value
+non_decimal = re.compile(r'[^\d.]+')
+
+class Squeue(object):
+    """
+    View information about jobs located in the Slurm scheduling queue.
+
+    https://slurm.schedmd.com/squeue.html
+
+    Examples
+    ---------
+
+    sq = Squeue()
+    sq.get()
+    """
+    def __init__(self, command, debug = False):
+        self.command = command
+        if not debug:
+            self.update()
+
+    def update(self):
+        """
+        Updates the attributes of the object
+        """
+        returncode, entries = self.get_squeue()
+        self.returncode = returncode
+        self.entries = entries
+
+    def get_squeue(self):
+        """
+        Get the 'squeue' HPC cluster usage information
+
+        Returns
+        -------
+        (int, list)
+            integer error code from the 'squeue' command
+            a list of dicts representing the 'squeue' values; the case of an error, returns an empty list
+        """
+        # system command to run
+        process = sp.Popen(self.command,
+                            stdout = sp.PIPE,
+                            stderr = sp.PIPE,
+                            shell = False,
+                            universal_newlines = True)
+        # run the command, capture stdout and stderr
+        proc_stdout, proc_stderr = process.communicate()
+        # check the exit status
+        if process.returncode == 0:
+            # parse the stdout table
+            entries = [ entry for entry in self.parse_SLURM_table(stdout = proc_stdout) ]
+        else:
+            entries = []
+        return(process.returncode, entries)
+
+    def parse_SLURM_table(self, stdout):
+        """
+        Convert the table formated output of SLURM 'sinfo -o '%all', 'squeue -o '%all', etc., commands into a list of dicts
+
+        Parameters
+        ----------
+        stdout: str
+            the stdout of a SLURM sinfo or squeue command
+
+        Returns
+        -------
+        dict
+            yields a dict of entries from each valid line in the stdout
+        """
+        # split all the stdout lines
+        lines = stdout.split('\n')
+        # get the headers from the first line
+        header_line = lines.pop(0)
+        # split the headers apart
+        header_cols = header_line.split()
+        header_cols = [ x.strip() for x in header_cols ]
+        # iterate over remaining lines
+        for line in lines:
+            # split each line
+            parts = line.split()
+            parts = [ x.strip() for x in parts ]
+            # start building dict for the values
+            d = {}
+            # make sure that the stdout line has the same number of fields as the headers
+            if len(parts) == len(header_cols):
+                # fill in the dict values and yield the results
+                for i, header_col in enumerate(header_cols):
+                    d[header_col] = parts[i]
+                yield(d)
+            else:
+                pass # do something here
+
+def create_totals_dict(entries, non_decimal = non_decimal, mem_key = mem_key):
+    """
+    Convert the per-job squeue output table dict into dict with job metrics aggregated
+
+    Returns
+    -------
+    dict
+        A dict with aggregated metrics. Memory in bytes, time in seconds.
+    """
+    # initialize metrics dict
+    d = {}
+    d['running'] = {}
+    d['running']['cpus'] = 0
+    d['running']['mem'] = 0.0
+    d['running']['jobs'] = 0
+    d['pending'] = {}
+    d['pending']['cpus'] = 0
+    d['pending']['mem'] = 0.0
+    d['pending']['jobs'] = 0
+
+    for entry in entries:
+        cpus = entry['MIN_CPUS']
+        mem = entry['MIN_MEMORY']
+        # convert to a float
+        mem_num = float(non_decimal.sub('', mem))
+
+        # parse the memory; 16T, "16G", "16M", "16K"
+        if 'K' in mem:
+            mem_val = mem_num * mem_key['K']
+        elif 'M' in mem:
+            mem_val = mem_num * mem_key['M']
+        elif 'G' in mem:
+            mem_val = mem_num * mem_key['G']
+        elif 'T' in mem:
+            mem_val = mem_num * mem_key['T']
+        else:
+            # silently drop non-matching values.. ?
+            mem_val = 0
+
+        if entry['STATE'] == 'PENDING':
+            d['pending']['cpus'] += int(cpus)
+            d['pending']['mem'] += mem_val
+            d['pending']['jobs'] += 1
+        elif entry['STATE'] == 'RUNNING':
+            d['running']['cpus'] += int(cpus)
+            d['running']['mem'] += mem_val
+            d['running']['jobs'] += 1
+    return(d)
+
+def main(**kwargs):
+    """
+    Main control function for the script
+    """
+    username = kwargs.pop('username')
+    SLURM_command = ['squeue', '-u', username, '-O', 'jobid,state,minmemory,mincpus']
+    # JOBID STATE MIN_MEMORY MIN_CPUS
+
+    # get the SLURM squeue
+    queue = Squeue(command = SLURM_command)
+
+    # count the total resource usage
+    totals = create_totals_dict(entries = queue.entries)
+
+    print("Running: {cpus} CPUs, {mem}GB memory, {jobs} jobs\nPending: {p_cpus} CPUs, {p_mem}GB memory, {p_jobs} jobs".format(
+        cpus = totals['running']['cpus'],
+        mem = totals['running']['mem'] / mem_key['G'],
+        jobs = totals['running']['jobs'],
+        p_cpus = totals['pending']['cpus'],
+        p_mem = totals['pending']['mem'] / mem_key['G'],
+        p_jobs = totals['pending']['jobs']
+        ))
+
+def parse():
+    """
+    Parses script args
+    """
+    username = os.environ.get('USER')
+    parser = argparse.ArgumentParser(description='Calculates total SLURM resource usage for the current user')
+    parser.add_argument("-u", "--username", default = username, dest = 'username', help="Username to look up. Defaults to current user.")
+    args = parser.parse_args()
+
+    main(**vars(args))
+
+if __name__ == '__main__':
+    parse()

@@ -40,7 +40,7 @@ class Squeue(object):
     ---------
 
     sq = Squeue()
-    sq.get()
+    sq.entries
     """
     def __init__(self, command, debug = False):
         self.command = command

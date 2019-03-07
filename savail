@@ -1,0 +1,194 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Get SLURM per-node resource availability summary
+
+roughly analagous to:
+sinfo -O 'allocmem,freemem,nodehost,partition'
+
+author: Stephen Kelly, NYU Langone Medical Center
+https://github.com/stevekm
+"""
+import sys
+import subprocess as sp
+
+class Sinfo(object):
+    """
+    Information about Slurm nodes and partitions.
+
+    https://slurm.schedmd.com/sinfo.html
+
+    Examples
+    ---------
+
+    sinfo = Sinfo()
+    sinfo.entries
+    """
+    def __init__(self, command, debug = False):
+        self.command = command
+        if not debug:
+            self.update()
+
+    def update(self):
+        """
+        Updates the attributes of the object
+        """
+        returncode, entries = self.get_squeue()
+        self.returncode = returncode
+        self.entries = entries
+
+    def get_squeue(self):
+        """
+        Get the 'squeue' HPC cluster usage information
+
+        Returns
+        -------
+        (int, list)
+            integer error code from the 'squeue' command
+            a list of dicts representing the 'squeue' values; the case of an error, returns an empty list
+        """
+        # system command to run
+        process = sp.Popen(self.command,
+                            stdout = sp.PIPE,
+                            stderr = sp.PIPE,
+                            shell = False,
+                            universal_newlines = True)
+        # run the command, capture stdout and stderr
+        proc_stdout, proc_stderr = process.communicate()
+        # check the exit status
+        if process.returncode == 0:
+            # parse the stdout table
+            entries = [ entry for entry in self.parse_SLURM_table(stdout = proc_stdout) ]
+        else:
+            entries = []
+        return(process.returncode, entries)
+
+    def parse_SLURM_table(self, stdout):
+        """
+        Convert the table formated output of SLURM 'sinfo -o '%all', 'squeue -o '%all', etc., commands into a list of dicts
+
+        Parameters
+        ----------
+        stdout: str
+            the stdout of a SLURM sinfo or squeue command
+
+        Returns
+        -------
+        dict
+            yields a dict of entries from each valid line in the stdout
+        """
+        # split all the stdout lines
+        lines = stdout.split('\n')
+        # get the headers from the first line
+        header_line = lines.pop(0)
+        # split the headers apart
+        header_cols = header_line.split()
+        header_cols = [ x.strip() for x in header_cols ]
+        # iterate over remaining lines
+        for line in lines:
+            # split each line
+            parts = line.split()
+            parts = [ x.strip() for x in parts ]
+            # start building dict for the values
+            d = {}
+            # make sure that the stdout line has the same number of fields as the headers
+            if len(parts) == len(header_cols):
+                # fill in the dict values and yield the results
+                for i, header_col in enumerate(header_cols):
+                    d[header_col] = parts[i]
+                yield(d)
+            else:
+                pass # do something here
+
+def get_cpu_aiot(aiot_str):
+    """
+    Parse the 'CPUS(A/I/O/T)' field in SLURM sinfo output (allocated, idle, other, total)
+
+    '0/40/0/40'
+    """
+    parts = aiot_str.split('/')
+    d = {
+    'allocated': int(parts[0]),
+    'idle': int(parts[1]),
+    'other': int(parts[2]),
+    'total': int(parts[3]),
+    }
+    return(d)
+
+def get_nodes(entries):
+    """
+    Aggregate per-node metrics from the sinfo entries
+    """
+    nodes = {}
+    for entry in entries:
+        hostname = entry['HOSTNAMES']
+        cpus = get_cpu_aiot(aiot_str = entry['CPUS(A/I/O/T)'])
+        if hostname not in nodes:
+            nodes[hostname] = {}
+        nodes[hostname]['totalmem'] = entry['MEMORY']
+        nodes[hostname]['freemem'] = entry['FREE_MEM'] # reported in MB...
+        nodes[hostname]['allocmem'] = entry['ALLOCMEM'] # reported in MB...
+        nodes[hostname]['state'] = entry['STATE'] # reported in MB...
+        nodes[hostname]['cpus'] = cpus['idle']
+        nodes[hostname]['totalcpus'] = cpus['total']
+        if 'partitions' not in nodes[hostname]:
+            nodes[hostname]['partitions'] = []
+        nodes[hostname]['partitions'].append(entry['PARTITION'])
+    return(nodes)
+
+def print_nodes(nodes):
+    """
+    Print the node metrics to console
+
+    https://docs.python.org/3.6/library/string.html#format-specification-mini-language
+    """
+    # sort the nodes by name, format some values for printing
+    data = []
+    for node, values in nodes.items():
+        d = { key:value for key, value in values.items() }
+        d['node'] = node
+        d['pcnt_mem'] = float(d['allocmem']) / float(d['totalmem']) * 100
+        d['pcnt_mem'] = "{0:.1f}".format(d['pcnt_mem'])
+        d['allocmem'] = "{0:.1f}GB".format(float(d['allocmem']) / 1024.0)
+        d['freemem'] = "{0:.1f}GB".format(float(d['freemem']) / 1024.0)
+        d['partitions'] = ",".join(d['partitions'])
+        data.append(d)
+    data = sorted(data, key=lambda k: k['node'])
+
+    # :(align right/left)<size of space to pad>.<lenght of original str>
+    print("{node:8.8}  {allocmem:>8.8}  {freemem:>8.8}  {pcnt_mem:>8.8}  {cpus:>6.6}  {state:5.5}  {partitions:<}".format(
+    node = "node",
+    allocmem = "allocmem",
+    freemem = "freemem",
+    pcnt_mem = "pcnt_mem",
+    cpus = "cpus",
+    state = "state",
+    partitions = "partitions"
+    ))
+    for d in data:
+
+        print(
+        "{node:8.8}  {allocmem:>8.8}  {freemem:>8.8}  {pcnt_mem:>8.8}  {cpus:>6.6}  {state:5.5}  {partitions:<}".format(
+            node = d['node'],
+            allocmem = d['allocmem'],
+            freemem = d['freemem'],
+            pcnt_mem = d['pcnt_mem'],
+            cpus = "{0}/{1}".format(d['cpus'],d['totalcpus']),
+            state = d['state'],
+            partitions = d['partitions']
+            )
+        )
+
+def main(**kwargs):
+    """
+    Main control function for the script
+    """
+    SLURM_command = ['sinfo', '-O', 'allocmem,freemem,nodehost,partition,cpus,sockets,memory,gres,cpusstate,reason,statelong']
+    # ALLOCMEM FREE_MEM HOSTNAMES PARTITION CPUS SOCKETS MEMORY GRES CPUS(A/I/O/T) REASON STATE
+
+    sinfo = Sinfo(command = SLURM_command)
+    nodes = get_nodes(sinfo.entries)
+    print_nodes(nodes)
+
+if __name__ == '__main__':
+    main()

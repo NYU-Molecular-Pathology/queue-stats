@@ -18,12 +18,14 @@ queries on the system
 import util.slurm as slurm
 import datetime
 import json
+import os
 
 timestamp = datetime.datetime.now()
 timestamp_str = timestamp.strftime('%Y-%m-%dT%H:%M:%S')
 
 # output JSON file
 output_json_file = "slurm.json"
+output_json_file_tmp = "slurm.json.tmp"
 
 # default best queue
 best_queue = "intellispace"
@@ -103,8 +105,9 @@ def get_best_queue(
     }
 
     # save the output JSON; overwrite old contents with new
-    with open(output_json_file, 'w') as f:
+    with open(output_json_file_tmp, 'w') as f:
         json.dump(data, f, indent = 4)
+    os.rename(output_json_file_tmp, output_json_file)
 
 
 if partitions.sinfo.returncode == 0 and squeue.returncode == 0:
